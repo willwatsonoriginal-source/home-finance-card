@@ -32,8 +32,21 @@ class FamilyCalendarCard extends HTMLElement {
       max_events_per_day_week: Number(config.max_events_per_day_week || 12),
       ...config,
     };
-    const validEnabled = [...this._enabledEntities].filter(entity => config.entities.includes(entity));
-    this._enabledEntities = new Set(validEnabled.length ? validEnabled : config.entities);
+    const storageKey = `family-calendar-card:${config.storage_key || config.title || "default"}:${config.entities.join("|")}`;
+    if (this._storageKey !== storageKey) {
+      this._storageKey = storageKey;
+      try {
+        const savedEntities = JSON.parse(localStorage.getItem(`${storageKey}:entities`) || "null");
+        const validSaved = Array.isArray(savedEntities)
+          ? savedEntities.filter(entity => config.entities.includes(entity))
+          : [];
+        this._enabledEntities = new Set(validSaved.length ? validSaved : config.entities);
+        const savedView = localStorage.getItem(`${storageKey}:view`);
+        this._view = savedView === "week" ? "week" : "month";
+      } catch (_) {
+        this._enabledEntities = new Set(config.entities);
+      }
+    }
     this._render();
     this._fetchEvents();
   }
@@ -104,6 +117,16 @@ class FamilyCalendarCard extends HTMLElement {
     const friendly = this._hass?.states?.[entity]?.attributes?.friendly_name;
     if (friendly) return friendly;
     return entity.replace(/^calendar\./, "").replace(/_/g, " ").replace(/\b\w/g, char => char.toUpperCase());
+  }
+
+  _savePreferences() {
+    if (!this._storageKey) return;
+    try {
+      localStorage.setItem(`${this._storageKey}:entities`, JSON.stringify([...this._enabledEntities]));
+      localStorage.setItem(`${this._storageKey}:view`, this._view);
+    } catch (_) {
+      // Home Assistant may disable storage in restrictive browser modes.
+    }
   }
 
   async _fetchEvents() {
@@ -288,6 +311,7 @@ class FamilyCalendarCard extends HTMLElement {
           this._month = new Date(this._week.getFullYear(), this._week.getMonth(), 1);
         }
         this._view = nextView;
+        this._savePreferences();
         this._calendarMenuOpen = false;
         this._render();
         this._fetchEvents();
@@ -305,6 +329,7 @@ class FamilyCalendarCard extends HTMLElement {
       checkbox.addEventListener("change", () => {
         if (checkbox.checked) this._enabledEntities.add(entity);
         else this._enabledEntities.delete(entity);
+        this._savePreferences();
         this._render();
       });
       const dot = document.createElement("span");
@@ -321,7 +346,8 @@ class FamilyCalendarCard extends HTMLElement {
       const day = new Date(gridStart); day.setDate(gridStart.getDate() + i);
       const key = this._dateKey(day);
       const cell = document.createElement("div");
-      cell.className = `day${day.getMonth() !== this._month.getMonth() ? " outside" : ""}${key === today ? " today" : ""}`;
+      const outside = this._view === "month" && day.getMonth() !== this._month.getMonth();
+      cell.className = `day${outside ? " outside" : ""}${key === today ? " today" : ""}`;
       const number = document.createElement("div"); number.className = "day-num";
       const numberText = document.createElement("span"); numberText.textContent = String(day.getDate()); number.append(numberText); cell.append(number);
       const eventsBox = document.createElement("div"); eventsBox.className = "events";
