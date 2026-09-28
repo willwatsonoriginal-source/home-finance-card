@@ -8,6 +8,10 @@ class FamilyCalendarCard extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._month = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    this._week = new Date();
+    this._view = "month";
+    this._enabledEntities = new Set();
+    this._calendarMenuOpen = false;
     this._events = [];
     this._loading = false;
     this._error = "";
@@ -25,8 +29,11 @@ class FamilyCalendarCard extends HTMLElement {
       entities: config.entities,
       show_adjacent_days: config.show_adjacent_days !== false,
       max_events_per_day: Number(config.max_events_per_day || 5),
+      max_events_per_day_week: Number(config.max_events_per_day_week || 12),
       ...config,
     };
+    const validEnabled = [...this._enabledEntities].filter(entity => config.entities.includes(entity));
+    this._enabledEntities = new Set(validEnabled.length ? validEnabled : config.entities);
     this._render();
     this._fetchEvents();
   }
@@ -70,6 +77,35 @@ class FamilyCalendarCard extends HTMLElement {
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
+  _visibleRange() {
+    if (this._view === "week") {
+      const start = new Date(this._week.getFullYear(), this._week.getMonth(), this._week.getDate());
+      start.setDate(start.getDate() - start.getDay());
+      const end = new Date(start);
+      end.setDate(end.getDate() + 7);
+      const startLabel = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(start);
+      const endLabel = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" })
+        .format(new Date(end.getFullYear(), end.getMonth(), end.getDate() - 1));
+      return { start, end, cells: 7, rows: 1, label: `${startLabel} – ${endLabel}` };
+    }
+
+    const first = new Date(this._month.getFullYear(), this._month.getMonth(), 1);
+    const start = new Date(first);
+    start.setDate(1 - first.getDay());
+    const daysInMonth = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+    const rows = Math.ceil((first.getDay() + daysInMonth) / 7);
+    const end = new Date(start);
+    end.setDate(end.getDate() + rows * 7);
+    const label = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(first);
+    return { start, end, cells: rows * 7, rows, label };
+  }
+
+  _calendarName(entity) {
+    const friendly = this._hass?.states?.[entity]?.attributes?.friendly_name;
+    if (friendly) return friendly;
+    return entity.replace(/^calendar\./, "").replace(/_/g, " ").replace(/\b\w/g, char => char.toUpperCase());
+  }
+
   async _fetchEvents() {
     if (!this._hass || !this._config || this._loading) return;
     const request = ++this._request;
@@ -77,11 +113,7 @@ class FamilyCalendarCard extends HTMLElement {
     this._error = "";
     this._render();
 
-    const first = new Date(this._month.getFullYear(), this._month.getMonth(), 1);
-    const start = new Date(first);
-    start.setDate(start.getDate() - start.getDay());
-    const end = new Date(start);
-    end.setDate(end.getDate() + 42);
+    const { start, end } = this._visibleRange();
 
     try {
       const response = await this._hass.callWS({
@@ -125,6 +157,7 @@ class FamilyCalendarCard extends HTMLElement {
   _eventsForDay(day) {
     const key = this._dateKey(day);
     return this._events.filter(event => {
+      if (!this._enabledEntities.has(event.calendar)) return false;
       if (!event.endDate) return this._dateKey(event.startDate) === key;
       if (event.allDay) {
         const lastIncluded = new Date(event.endDate);
@@ -150,11 +183,9 @@ class FamilyCalendarCard extends HTMLElement {
 
   _render() {
     if (!this.shadowRoot || !this._config) return;
-    const first = new Date(this._month.getFullYear(), this._month.getMonth(), 1);
-    const gridStart = new Date(first);
-    gridStart.setDate(1 - first.getDay());
+    const range = this._visibleRange();
+    const gridStart = range.start;
     const today = this._dateKey(new Date());
-    const monthName = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(this._month);
     const weekdays = Array.from({ length: 7 }, (_, i) => {
       const d = new Date(2024, 0, 7 + i);
       return new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(d);
@@ -167,18 +198,30 @@ class FamilyCalendarCard extends HTMLElement {
         ha-card { height:100%; min-height:0; box-sizing:border-box; display:flex; flex-direction:column; overflow:hidden;
           border:1px solid var(--ha-card-border-color, var(--divider-color)); border-radius:14px;
           background:var(--ha-card-background, var(--card-background-color)); }
-        .top { padding:14px 16px 10px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+        .top { padding:14px 16px 10px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
         .heading { min-width:0; }
         .title { font-size:clamp(18px, 2vw, 26px); font-weight:650; line-height:1.2; }
         .month { margin-top:2px; font-size:clamp(14px, 1.4vw, 19px); font-weight:550; color:var(--secondary-text-color); }
-        .controls { display:flex; gap:5px; align-items:center; }
+        .controls { display:flex; gap:5px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
         button { font:inherit; color:var(--primary-text-color); background:var(--secondary-background-color); border:0; border-radius:8px; min-width:34px; height:34px; cursor:pointer; }
         button:hover { filter:brightness(.96); }
         .today-btn { padding:0 10px; font-size:13px; }
+        .view-toggle { display:flex; padding:2px; background:var(--secondary-background-color); border-radius:9px; }
+        .view-toggle button { height:30px; padding:0 9px; font-size:12px; background:transparent; }
+        .view-toggle button.active { color:var(--primary-background-color); background:var(--primary-color); }
+        .calendar-picker { position:relative; }
+        .calendars-btn { padding:0 10px; font-size:12px; }
+        .calendar-menu { position:absolute; z-index:5; top:39px; right:0; min-width:210px; padding:7px;
+          background:var(--ha-card-background,var(--card-background-color)); border:1px solid var(--divider-color);
+          border-radius:10px; box-shadow:0 6px 22px rgba(0,0,0,.18); }
+        .calendar-option { display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:7px; font-size:13px; cursor:pointer; white-space:nowrap; }
+        .calendar-option:hover { background:var(--secondary-background-color); }
+        .calendar-option input { margin:0; accent-color:var(--primary-color); }
+        .calendar-dot { width:9px; height:9px; flex:0 0 auto; border-radius:50%; background:var(--primary-color); }
         .status { padding:0 16px 7px; color:var(--secondary-text-color); font-size:12px; min-height:12px; }
         .weekdays { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); border-top:1px solid var(--divider-color); border-left:1px solid var(--divider-color); margin:0 10px; }
         .weekday { text-align:center; padding:7px 2px; font-size:12px; font-weight:600; color:var(--secondary-text-color); border-right:1px solid var(--divider-color); }
-        .grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); grid-template-rows:repeat(6,minmax(0,1fr)); flex:1 1 auto; min-height:0; margin:0 10px 10px; border-left:1px solid var(--divider-color); border-top:1px solid var(--divider-color); }
+        .grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); grid-template-rows:repeat(var(--fc-rows),minmax(0,1fr)); flex:1 1 auto; min-height:0; margin:0 10px 10px; border-left:1px solid var(--divider-color); border-top:1px solid var(--divider-color); }
         .day { min-width:0; min-height:0; overflow:hidden; padding:5px 5px 4px; border-right:1px solid var(--divider-color); border-bottom:1px solid var(--divider-color); display:flex; flex-direction:column; gap:3px; }
         .day.outside { color:var(--secondary-text-color); background:color-mix(in srgb, var(--secondary-background-color) 52%, transparent); }
         .day-num { font-size:12px; line-height:19px; height:20px; flex:0 0 auto; }
@@ -206,9 +249,17 @@ class FamilyCalendarCard extends HTMLElement {
         <div class="top">
           <div class="heading"><div class="title"></div><div class="month"></div></div>
           <div class="controls">
-            <button data-action="prev" aria-label="Previous month">‹</button>
+            <div class="view-toggle">
+              <button data-view="month">Month</button>
+              <button data-view="week">Week</button>
+            </div>
+            <div class="calendar-picker">
+              <button class="calendars-btn" data-action="calendars">Calendars ▾</button>
+              <div class="calendar-menu"></div>
+            </div>
+            <button data-action="prev" aria-label="Previous period">‹</button>
             <button class="today-btn" data-action="today">Today</button>
-            <button data-action="next" aria-label="Next month">›</button>
+            <button data-action="next" aria-label="Next period">›</button>
           </div>
         </div>
         <div class="status"></div>
@@ -217,15 +268,56 @@ class FamilyCalendarCard extends HTMLElement {
       </ha-card>`;
 
     root.querySelector(".title").textContent = this._config.title;
-    root.querySelector(".month").textContent = monthName;
+    root.querySelector(".month").textContent = range.label;
     root.querySelector(".status").textContent = this._error ? `Calendar error: ${this._error}` : (this._loading ? "Updating calendar…" : "");
     const weekdayRow = root.querySelector(".weekdays");
     for (const name of weekdays) {
       const cell = document.createElement("div"); cell.className = "weekday"; cell.textContent = name; weekdayRow.append(cell);
     }
 
+    root.querySelectorAll("button[data-view]").forEach(button => {
+      button.classList.toggle("active", button.dataset.view === this._view);
+      button.addEventListener("click", () => {
+        const nextView = button.dataset.view;
+        if (nextView === this._view) return;
+        if (nextView === "week") {
+          const now = new Date();
+          this._week = now.getMonth() === this._month.getMonth() && now.getFullYear() === this._month.getFullYear()
+            ? now : new Date(this._month);
+        } else {
+          this._month = new Date(this._week.getFullYear(), this._week.getMonth(), 1);
+        }
+        this._view = nextView;
+        this._calendarMenuOpen = false;
+        this._render();
+        this._fetchEvents();
+      });
+    });
+
+    const calendarMenu = root.querySelector(".calendar-menu");
+    calendarMenu.hidden = !this._calendarMenuOpen;
+    for (const entity of this._config.entities) {
+      const option = document.createElement("label");
+      option.className = "calendar-option";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = this._enabledEntities.has(entity);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) this._enabledEntities.add(entity);
+        else this._enabledEntities.delete(entity);
+        this._render();
+      });
+      const dot = document.createElement("span");
+      dot.className = `calendar-dot ${this._colorFor(entity)}`;
+      const name = document.createElement("span");
+      name.textContent = this._calendarName(entity);
+      option.append(checkbox, dot, name);
+      calendarMenu.append(option);
+    }
+
     const grid = root.querySelector(".grid");
-    for (let i = 0; i < 42; i++) {
+    grid.style.setProperty("--fc-rows", String(range.rows));
+    for (let i = 0; i < range.cells; i++) {
       const day = new Date(gridStart); day.setDate(gridStart.getDate() + i);
       const key = this._dateKey(day);
       const cell = document.createElement("div");
@@ -234,7 +326,7 @@ class FamilyCalendarCard extends HTMLElement {
       const numberText = document.createElement("span"); numberText.textContent = String(day.getDate()); number.append(numberText); cell.append(number);
       const eventsBox = document.createElement("div"); eventsBox.className = "events";
       const events = this._eventsForDay(day);
-      const max = Math.max(1, this._config.max_events_per_day);
+      const max = Math.max(1, this._view === "week" ? this._config.max_events_per_day_week : this._config.max_events_per_day);
       for (const event of events.slice(0, max)) {
         const chip = document.createElement("div"); chip.className = `event ${this._colorFor(event.calendar)}`;
         const line = document.createElement("div"); line.className = "event-line";
@@ -250,9 +342,23 @@ class FamilyCalendarCard extends HTMLElement {
 
     root.querySelectorAll("button[data-action]").forEach(button => button.addEventListener("click", () => {
       const action = button.dataset.action;
-      if (action === "today") this._month = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-      else this._month = new Date(this._month.getFullYear(), this._month.getMonth() + (action === "next" ? 1 : -1), 1);
-      this._render(); this._fetchEvents();
+      if (action === "calendars") {
+        this._calendarMenuOpen = !this._calendarMenuOpen;
+        this._render();
+        return;
+      }
+      if (action === "today") {
+        const now = new Date();
+        this._month = new Date(now.getFullYear(), now.getMonth(), 1);
+        this._week = now;
+      } else if (this._view === "week") {
+        this._week = new Date(this._week.getFullYear(), this._week.getMonth(), this._week.getDate() + (action === "next" ? 7 : -7));
+      } else {
+        this._month = new Date(this._month.getFullYear(), this._month.getMonth() + (action === "next" ? 1 : -1), 1);
+      }
+      this._calendarMenuOpen = false;
+      this._render();
+      this._fetchEvents();
     }));
     this.shadowRoot.replaceChildren(root);
   }
