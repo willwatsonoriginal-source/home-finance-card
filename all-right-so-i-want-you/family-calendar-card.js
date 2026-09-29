@@ -59,10 +59,10 @@ class FamilyCalendarCard extends HTMLElement {
   get hass() { return this._hass; }
 
   getGridOptions() {
-    return { columns: 12, min_columns: 6, rows: 6, min_rows: 4, max_rows: 12 };
+    return { columns: 12, min_columns: 6, rows: 12, min_rows: 12, max_rows: 20 };
   }
 
-  getCardSize() { return 6; }
+  getCardSize() { return 12; }
 
   connectedCallback() {
     if (!this._refreshTimer) this._refreshTimer = window.setInterval(() => this._fetchEvents(), 5 * 60 * 1000);
