@@ -197,8 +197,8 @@ class FamilyCalendarCard extends HTMLElement {
 
   _timeLabel(event) {
     if (event.allDay) return "All day";
-    return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" })
-      .format(event.startDate).replace(":00", "");
+    const format = d => new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(d).replace(":00", "");
+    return event.endDate ? `${format(event.startDate)} – ${format(event.endDate)}` : format(event.startDate);
   }
 
   _colorFor(entity) {
@@ -212,20 +212,31 @@ class FamilyCalendarCard extends HTMLElement {
     root.querySelector('.weekdays').remove();
     const grid = root.querySelector('.grid');
     grid.className = 'schedule'; grid.replaceChildren();
+    const visible = this._events.filter(e => !e.allDay && this._enabledEntities.has(e.calendar) && e.startDate < range.end && (e.endDate || e.startDate) >= range.start);
+    let first = 7 * 60, last = 20 * 60;
+    for (const e of visible) {
+      first = Math.min(first, e.startDate.getHours()*60 + e.startDate.getMinutes());
+      const end = e.endDate || new Date(+e.startDate + 1800000);
+      if (this._dateKey(e.startDate) === this._dateKey(end)) last = Math.max(last, end.getHours()*60 + end.getMinutes());
+      else { first = 0; last = 1440; } // Keep actual overnight events visible too.
+    }
+    const startMinute = Math.floor(first/60)*60, endMinute = Math.min(1440, Math.ceil(last/60)*60);
+    const duration = endMinute - startMinute;
+    grid.style.setProperty('--hour-size', (60/duration*100)+'%');
     const style = document.createElement('style');
     style.textContent = `
-      .schedule { margin:0 10px 12px; overflow:auto; max-height:76vh; min-height:420px; border:1px solid var(--divider-color); border-radius:10px; }
-      .schedule-head,.schedule-all,.schedule-body { display:grid; grid-template-columns:58px repeat(7,minmax(100px,1fr)); min-width:758px; }
+      .schedule { display:flex; flex-direction:column; flex:1; margin:0 10px 12px; overflow:hidden; min-height:0; border:1px solid var(--divider-color); border-radius:10px; }
+      .schedule-head,.schedule-all,.schedule-body { display:grid; grid-template-columns:48px repeat(7,minmax(0,1fr)); min-width:0; }
       .schedule-head { position:sticky; top:0; z-index:3; background:var(--card-background-color,#fff); }
       .schedule-head>div { text-align:center; padding:12px 4px; border-bottom:1px solid var(--divider-color); font-size:13px; }
       .schedule-head .current { color:var(--primary-color); font-weight:750; }
       .schedule-all { position:sticky; top:42px; z-index:3; background:var(--card-background-color,#fff); }
       .schedule-all>div { padding:5px; border-bottom:1px solid var(--divider-color); border-right:1px solid var(--divider-color); font-size:11px; }
-      .schedule-body { height:1536px; } .hour-labels,.time-day { position:relative; }
+      .schedule-body { flex:1; min-height:0; } .hour-labels,.time-day { position:relative; }
       .hour-labels span { position:absolute; right:8px; font-size:11px; color:var(--secondary-text-color); }
-      .time-day { border-left:1px solid var(--divider-color); background:repeating-linear-gradient(to bottom,transparent 0,transparent 31px,color-mix(in srgb,var(--divider-color) 50%,transparent) 31px,color-mix(in srgb,var(--divider-color) 50%,transparent) 32px,transparent 32px,transparent 63px,var(--divider-color) 63px,var(--divider-color) 64px); }
-      .time-event { position:absolute; box-sizing:border-box; padding:4px 6px; border-radius:6px; border-left:3px solid currentColor; overflow:hidden; text-align:left; font-size:12px; line-height:1.2; min-width:0; }
-      .time-event strong,.time-event small { display:block; } .time-event small { margin-top:3px; font-size:10px; }
+      .time-day { border-left:1px solid var(--divider-color); background:repeating-linear-gradient(to bottom,transparent 0,transparent calc(var(--hour-size) - 1px),var(--divider-color) calc(var(--hour-size) - 1px),var(--divider-color) var(--hour-size)); }
+      .time-event { display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-start; position:absolute; box-sizing:border-box; padding:4px 6px; border-radius:6px; border-left:3px solid currentColor; overflow:hidden; text-align:left; font-size:12px; line-height:1.2; min-width:0; }
+      .time-event strong,.time-event small { display:block; flex:0 0 auto; max-width:100%; overflow-wrap:anywhere; } .time-event small { margin-top:3px; font-size:10px; }
       .all-event { height:auto; width:100%; text-align:left; padding:5px; margin:2px 0; font-size:11px; }
       .now-line { position:absolute; left:0; right:0; border-top:2px solid #ec5265; pointer-events:none; z-index:2; }
     `;
@@ -235,7 +246,7 @@ class FamilyCalendarCard extends HTMLElement {
     const all=document.createElement('div'); all.className='schedule-all'; const caption=document.createElement('div'); caption.textContent='All day'; all.append(caption);
     const body=document.createElement('div'); body.className='schedule-body';
     const labels=document.createElement('div'); labels.className='hour-labels';
-    for(let h=0;h<24;h++){const l=document.createElement('span'); l.style.top=`${h*64+2}px`;l.textContent=new Intl.DateTimeFormat(undefined,{hour:'numeric'}).format(new Date(2026,0,1,h));labels.append(l);}body.append(labels);
+    for(let h=startMinute/60;h<endMinute/60;h++){const l=document.createElement('span'); l.style.top=`${(h*60-startMinute)/duration*100}%`;l.textContent=new Intl.DateTimeFormat(undefined,{hour:'numeric'}).format(new Date(2026,0,1,h));labels.append(l);}body.append(labels);
     for(const day of days){
       const next=new Date(day);next.setDate(next.getDate()+1);
       const h=document.createElement('div');h.textContent=new Intl.DateTimeFormat(undefined,{weekday:'short',day:'numeric'}).format(day);
@@ -243,26 +254,26 @@ class FamilyCalendarCard extends HTMLElement {
       const ac=document.createElement('div');
       for(const event of this._eventsForDay(day).filter(e=>e.allDay)){const b=document.createElement('button');b.className=`all-event ${this._colorFor(event.calendar)}`;b.textContent=event.summary||'Untitled event';b.onclick=()=>this._showEvent(event);ac.append(b);}all.append(ac);
       const col=document.createElement('div');col.className='time-day';
-      col.addEventListener('click',e=>{if(e.target!==col)return;const minutes=Math.min(1410,Math.floor((e.clientY-col.getBoundingClientRect().top)/64*60/30)*30);const date=new Date(day);date.setMinutes(minutes);this._newEvent(date);});
+      col.addEventListener('click',e=>{if(e.target!==col)return;const minutes=Math.min(endMinute-30,Math.max(startMinute,Math.floor((startMinute+(e.clientY-col.getBoundingClientRect().top)/col.getBoundingClientRect().height*duration)/30)*30));const date=new Date(day);date.setMinutes(minutes);this._newEvent(date);});
       const timed=this._events.filter(e=>!e.allDay&&this._enabledEntities.has(e.calendar)&&e.startDate<next&&(e.endDate||new Date(+e.startDate+1800000))>day).map(event=>{
         const start=event.startDate<day?0:event.startDate.getHours()*60+event.startDate.getMinutes();
         const endDate=event.endDate||new Date(+event.startDate+1800000);
         const end=endDate>=next?1440:endDate.getHours()*60+endDate.getMinutes();
-        return {event,start,end:Math.max(start+1,end)};
-      }).sort((a,b)=>a.start-b.start||b.end-a.end);
+        return {event,start:Math.max(startMinute,start),end:Math.min(endMinute,Math.max(start+1,end))};
+      }).filter(t=>t.end>t.start).sort((a,b)=>a.start-b.start||b.end-a.end);
       // Assign simultaneous events separate lanes within each overlap group.
       const groups=[];let group=[],edge=-1;
       for(const t of timed){if(t.start>=edge&&group.length){groups.push(group);group=[];edge=-1;}group.push(t);edge=Math.max(edge,t.end);}if(group.length)groups.push(group);
       for(const g of groups){const lanes=[];for(const t of g){let lane=lanes.findIndex(end=>end<=t.start);if(lane<0)lane=lanes.length;lanes[lane]=t.end;t.lane=lane;}
         for(const t of g){const b=document.createElement('button');b.className=`time-event ${this._colorFor(t.event.calendar)}`;
-          b.style.cssText=`top:${t.start/60*64}px;height:${Math.max(20,(t.end-t.start)/60*64)}px;left:calc(${t.lane/lanes.length*100}% + 2px);width:calc(${100/lanes.length}% - 4px)`;
+          b.style.cssText=`top:${(t.start-startMinute)/duration*100}%;height:${(t.end-t.start)/duration*100}%;left:calc(${t.lane/lanes.length*100}% + 2px);width:calc(${100/lanes.length}% - 4px)`;
           const title=document.createElement('strong');title.textContent=t.event.summary||'Untitled event';const time=document.createElement('small');time.textContent=this._timeLabel(t.event);b.append(title,time);b.title=`${title.textContent} · ${time.textContent}`;b.onclick=()=>this._showEvent(t.event);col.append(b);
         }
       }
-      if(this._dateKey(day)===this._dateKey(new Date())){const now=new Date();const line=document.createElement('div');line.className='now-line';line.style.top=`${(now.getHours()+now.getMinutes()/60)*64}px`;col.append(line);}body.append(col);
+      if(this._dateKey(day)===this._dateKey(new Date())){const now=new Date();const line=document.createElement('div');line.className='now-line';const minute=now.getHours()*60+now.getMinutes();line.style.top=`${(minute-startMinute)/duration*100}%`;if(minute>=startMinute&&minute<=endMinute)col.append(line);}body.append(col);
     }
     grid.append(head,all,body);
-    requestAnimationFrame(()=>{grid.scrollTop=64*7;});
+    
   }
 
   _dialog(title) {
@@ -326,6 +337,7 @@ class FamilyCalendarCard extends HTMLElement {
     });
 
     const root = document.createElement("div");
+    root.style.cssText = "height:100%;min-height:0;";
     root.innerHTML = `
       <style>
         :host { display:block; height:100%; min-height:0; color:var(--primary-text-color); }
@@ -503,7 +515,7 @@ class FamilyCalendarCard extends HTMLElement {
     }));
     if (this._view === "week") this._renderWeek(root, range);
     const add = document.createElement("button");
-    add.textContent = "+ Event"; add.setAttribute("aria-label", "Add event");
+    add.textContent = "+"; add.style.cssText="font-size:24px;font-weight:750;"; add.setAttribute("aria-label", "Add event");
     add.addEventListener("click", () => this._newEvent());
     root.querySelector(".controls").prepend(add);
     // Keep the form alive when a background refresh completes.
