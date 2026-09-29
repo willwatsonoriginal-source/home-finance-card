@@ -13,7 +13,7 @@ class HomeFinanceBudgetCard extends HTMLElement {
 
   getCardSize() { return (this._config?.entities?.length || 5) + 2; }
   _number(value) { const n = Number(value); return Number.isFinite(n) ? n : 0; }
-  _money(value) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(this._number(value)); }
+  _money(value) { const n = this._number(value); return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(n) < 0.5 ? 0 : n); }
 
   _categoryData(entry) {
     const item = typeof entry === "string" ? { entity: entry } : entry;
