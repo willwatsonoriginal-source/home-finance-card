@@ -31,14 +31,16 @@ class HomeFinanceBudgetCard extends HTMLElement {
       const state = this._hass.states[item.entity];
       const attributes = state?.attributes || {};
       const name = item.name || attributes.friendly_name || item.entity;
-      const available = this._number(attributes.available);
+      const adjustmentEntity = item.adjustment_entity;
+      const manualAdjustment = adjustmentEntity ? this._number(this._hass.states[adjustmentEntity]?.state) : 0;
+      const available = this._number(attributes.available) + manualAdjustment;
       const spent = this._number(attributes.spent);
-      const percent = Math.max(0, Math.min(100, this._number(state?.state)));
+      const percent = Math.max(0, Math.min(100, available ? ((available - spent) / available) * 100 : 0));
       const color = item.color || "var(--primary-color)";
       return `<button class="row" data-entity="${item.entity}" aria-label="Open ${name}">
         <span class="labels"><span class="name">${name}</span><span class="amount">${this._money(spent)} / ${this._money(available)}</span></span>
         <span class="track"><span class="fill" style="width:${percent}%;background:${color}"></span></span>
-        <span class="percent">${Math.round(percent)}%</span>
+        <span class="percent">${Math.round(percent)}%</span>${adjustmentEntity ? `<span class="adjustment" data-adjustment="${adjustmentEntity}">${manualAdjustment ? `Manual: ${manualAdjustment > 0 ? '+' : ''}${this._money(manualAdjustment)}` : 'Add / subtract'}</span>` : ''}
       </button>`;
     }).join("");
 
@@ -52,14 +54,21 @@ class HomeFinanceBudgetCard extends HTMLElement {
         .name { font-weight:600; } .amount { color:var(--secondary-text-color); white-space:nowrap; }
         .track { background:color-mix(in srgb, var(--primary-color) 12%, transparent); border-radius:999px; display:block; grid-column:1; height:14px; overflow:hidden; }
         .fill { border-radius:999px; display:block; height:100%; min-width:0; transition:width .3s ease; }
-        .percent { align-self:end; color:var(--secondary-text-color); font-size:13px; font-weight:600; grid-column:2; grid-row:1 / span 2; text-align:right; }
+        .percent { align-self:end; color:var(--secondary-text-color); font-size:13px; font-weight:600; grid-column:2; grid-row:1; text-align:right; }.adjustment{color:var(--secondary-text-color);font-size:11px;grid-column:2;grid-row:2;text-align:right}
         @media (max-width: 450px) { .labels { align-items:flex-start; flex-direction:column; gap:2px; } }
       </style>
       <h2>${this._config.title || "Monthly Budget"}</h2>
       <div class="month">${this._config.subtitle || new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date())}</div>${rows}
     </ha-card>`;
     this.querySelectorAll(".row").forEach((button) => button.addEventListener("click", () => {
-      this.dispatchEvent(new CustomEvent("hass-more-info", { bubbles: true, composed: true, detail: { entityId: button.dataset.entity } }));
+      const adjustment = button.querySelector(".adjustment")?.dataset.adjustment;
+      if (!adjustment) return this.dispatchEvent(new CustomEvent("hass-more-info", { bubbles: true, composed: true, detail: { entityId: button.dataset.entity } }));
+      const change = window.prompt("Enter a dollar change for this month. Positive adds room; negative subtracts it.");
+      if (change === null || change.trim() === "") return;
+      const amount = Number(change);
+      if (!Number.isFinite(amount)) return window.alert("Please enter a valid number, such as 25 or -25.");
+      const existing = this._number(this._hass.states[adjustment]?.state);
+      this._hass.callService("input_number", "set_value", { entity_id: adjustment, value: Number((existing + amount).toFixed(2)) });
     }));
   }
 }
