@@ -1,111 +1,54 @@
-/* Home Finance Budget Card — no credentials or financial values are stored here. */
+/* Server-backed budget entries. No credentials or financial data embedded. */
 class HomeFinanceBudgetCard extends HTMLElement {
-  setConfig(config) {
-    if (!config.entities || !Array.isArray(config.entities)) throw new Error("Set an entities list for home-finance-budget-card.");
-    this._config = config;
+  constructor(){super();this.attachShadow({mode:'open'});}
+  setConfig(config){
+    if(!Array.isArray(config.entities))throw Error('Set an entities list.');
+    this._config={...config,entities:config.entities.map(e=>typeof e==='string'?{entity:e}:{...e})};
+    if(!this._config.entities.some(e=>e.entity.includes('blessing_others')))this._config.entities.push({entity:'sensor.home_finance_blessing_others_budget_remaining_percent',name:'Blessing Others',color:'#d49a59'});
     this._render();
   }
-
-  set hass(hass) {
-    this._hass = hass;
-    this._render();
+  set hass(hass){this._hass=hass;if(this._active)this._history();else this._render();}
+  getCardSize(){return 8;}
+  _number(v){const n=Number(v);return Number.isFinite(n)?n:0;}
+  _money(v){const n=this._number(v);return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:0}).format(Math.abs(n)<.5?0:n);}
+  _escape(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  _month(){const p=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit'}).formatToParts(new Date());return `${p.find(x=>x.type==='year').value}-${p.find(x=>x.type==='month').value}`;}
+  _ledger(){return this._hass?.states['sensor.home_finance_manual_ledger']?.attributes;}
+  _categoryData(item){
+    const a=this._hass.states[item.entity]?.attributes,category=a?.category||(item.entity.includes('blessing_others')?'Blessing Others':item.name);
+    const month=this._month(),net=this._number(this._ledger()?.totals?.[month]?.[category]);
+    const ready=!!a&&a.budget_month===month&&this._ledger()?.schema_version===1;
+    return {item,category,name:item.name||category,available:this._number(a?.available),remaining:this._number(a?.remaining)+net-this._number(a?.manual_net),ready};
   }
-
-  getCardSize() { return (this._config?.entities?.length || 5) + 2; }
-  _number(value) { const n = Number(value); return Number.isFinite(n) ? n : 0; }
-  _money(value) { const n = this._number(value); return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(n) < 0.5 ? 0 : n); }
-
-  _categoryData(entry) {
-    const item = typeof entry === "string" ? { entity: entry } : entry;
-    const state = this._hass.states[item.entity];
-    const attributes = state?.attributes || {};
-    const adjustmentEntity = item.adjustment_entity;
-    const helperAdjustment = adjustmentEntity ? this._number(this._hass.states[adjustmentEntity]?.state) : 0;
-    const savedAdjustment = this._number(attributes.adjustments);
-    const available = this._number(attributes.available) + helperAdjustment - savedAdjustment;
-    const spent = this._number(attributes.spent);
-    return {
-      item, name: item.name || attributes.friendly_name || item.entity, adjustmentEntity,
-      helperAdjustment, available, spent, remaining: available - spent,
-    };
+  _render(){
+    if(!this._config||!this._hass)return;
+    const colors=['#42b883','#3b82f6','#9a7bea','#e5a44b','#d478a3','#d49a59'];
+    const rows=this._config.entities.map((item,i)=>{const d=this._categoryData(item),percent=Math.max(0,Math.min(100,d.available>0?d.remaining/d.available*100:0));const color=/^#[0-9a-f]{3,8}$/i.test(item.color||'')?item.color:colors[i%colors.length];return `<button class="row" data-row="${i}" ${d.ready?'':'disabled'} aria-label="Adjust ${this._escape(d.name)}"><span class="labels"><span class="name">${this._escape(d.name)}</span><span class="amount">${d.ready?`${this._money(d.remaining)} / ${this._money(d.available)}`:'Awaiting budget update'}</span></span><span class="track"><span class="fill" style="width:${d.ready?percent:0}%;background:${color}"></span></span><span class="percent">${d.ready?Math.round(percent)+'%':'—'}</span></button>`;}).join('');
+    this.shadowRoot.innerHTML=`<style>
+      :host{display:block;color:var(--primary-text-color,#172334);font-family:var(--primary-font-family,system-ui)}ha-card{display:block;padding:22px;border-radius:18px;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#dfe6ee);box-shadow:0 2px 10px #23365305}.heading{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:16px}h2{margin:0;font-size:23px;font-weight:650;letter-spacing:-.4px}.month{font-size:13px;color:var(--secondary-text-color,#65758b)}
+      button{font:inherit;color:inherit;cursor:pointer;touch-action:manipulation}button:disabled{cursor:default;opacity:.6}button:focus-visible,input:focus-visible{outline:2px solid #3b82f6;outline-offset:3px}.row{appearance:none;border:0;background:transparent;display:grid;grid-template-columns:minmax(0,1fr) 38px;gap:8px 12px;width:100%;padding:11px 0;text-align:left}.labels{display:flex;justify-content:space-between;gap:8px;font-size:14px;grid-column:1}.name{font-weight:600}.amount{color:var(--secondary-text-color,#65758b);font-variant-numeric:tabular-nums;white-space:nowrap}.track{background:var(--secondary-background-color,#e7edf5);height:12px;border-radius:99px;overflow:hidden;grid-column:1}.fill{display:block;height:100%;border-radius:99px;transition:width .25s}.percent{grid-column:2;grid-row:2;font-size:13px;align-self:center;text-align:right;color:var(--secondary-text-color,#65758b)}
+      dialog{border:1px solid var(--divider-color,#dfe6ee);border-radius:24px;background:var(--card-background-color,#fff);color:inherit;padding:24px;width:min(920px,calc(100vw - 32px));max-height:calc(100dvh - 32px);box-sizing:border-box;box-shadow:0 24px 100px #17233433}dialog::backdrop{background:#17233466;backdrop-filter:blur(3px)}.entry-layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(220px,1fr);gap:26px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px}h3{font-size:24px;letter-spacing:-.4px;margin:0}.close{border:0;background:transparent;min-height:44px;min-width:44px;font-size:30px}.note{color:var(--secondary-text-color,#65758b);font-size:14px;margin:6px 0 16px}.display{padding:14px 18px;background:var(--secondary-background-color,#eff3f8);border-radius:14px;text-align:right;font-size:34px;font-variant-numeric:tabular-nums;margin-bottom:14px}
+      .keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.key,.choice,.primary,.secondary{border:0;border-radius:12px;min-height:52px;background:var(--secondary-background-color,#eff3f8);padding:10px;font-weight:600}.key{font-size:22px}.primary{background:#397de2;color:white}.choice{width:100%;text-align:left;margin-bottom:8px}.choice.selected{background:#e0ebfb;color:#1853a7;outline:2px solid #397de2}.actions{display:flex;gap:10px;margin-top:16px}.actions>*{flex:1}.error{color:#b42338;font-size:14px;margin-top:12px;white-space:pre-wrap}input{box-sizing:border-box;width:100%;font:inherit;font-size:18px;padding:14px;border:1px solid var(--divider-color,#dfe6ee);border-radius:12px;background:var(--secondary-background-color,#eff3f8);color:inherit}.keyboard{margin-top:14px;display:flex;flex-direction:column;gap:6px}.keyboard-line{display:flex;justify-content:center;gap:4px}.letter{min-width:0;flex:1;border:0;border-radius:8px;min-height:44px;background:var(--secondary-background-color,#eff3f8);padding:2px;font-size:15px}.letter.wide{flex:3}.summary{font-size:14px;line-height:1.5;padding:10px 0}
+      aside{border-left:1px solid var(--divider-color,#dfe6ee);padding-left:24px}aside h4{margin:0 0 5px;font-size:17px}.history-list{max-height:440px;overflow:auto}.history-item{border-bottom:1px solid var(--divider-color,#dfe6ee);padding:13px 0}.history-top{display:flex;justify-content:space-between;gap:8px;font-weight:600;font-size:14px}.history-description{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:5px;font-size:14px}.history-date,.history-target{font-size:12px;color:var(--secondary-text-color,#65758b);margin-top:5px}@media(max-width:650px){dialog{padding:16px}.entry-layout{grid-template-columns:1fr;gap:20px}aside{border-left:0;border-top:1px solid var(--divider-color,#dfe6ee);padding:16px 0 0}.history-list{max-height:170px}.heading{flex-wrap:wrap}.labels{flex-wrap:wrap}.letter{font-size:13px}}
+    </style><ha-card><div class="heading"><h2>${this._escape(this._config.title||'Monthly Budget')}</h2><span class="month">${this._escape(this._config.subtitle||new Intl.DateTimeFormat('en-US',{month:'long',year:'numeric',timeZone:'America/Los_Angeles'}).format(new Date()))}</span></div>${rows}</ha-card>`;
+    this.shadowRoot.querySelectorAll('[data-row]').forEach(b=>b.onclick=()=>this._openKeypad(Number(b.dataset.row)));
   }
-
-  _render() {
-    if (!this._config || !this._hass) return;
-    const rows = this._config.entities.map((entry, index) => {
-      const data = this._categoryData(entry);
-      const percent = Math.max(0, Math.min(100, data.available > 0 ? (data.remaining / data.available) * 100 : 0));
-      const color = data.item.color || "var(--primary-color)";
-      return `<button class="row" data-row="${index}" aria-label="Adjust ${data.name}">
-        <span class="labels"><span class="name">${data.name}</span><span class="amount">${this._money(data.remaining)} / ${this._money(data.available)}</span></span>
-        <span class="track"><span class="fill" style="width:${percent}%;background:${color}"></span></span>
-        <span class="percent">${Math.round(percent)}%</span>
-      </button>`;
-    }).join("");
-
-    this.innerHTML = `<ha-card>
-      <style>
-        ha-card { padding: 18px; font-family: var(--primary-font-family); }
-        h2 { margin: 0 0 2px; font-size: 23px; line-height: 1.2; }
-        .month { color: var(--secondary-text-color); font-size: 14px; margin-bottom: 15px; }
-        .row { appearance:none; border:0; background:transparent; color:var(--primary-text-color); cursor:pointer; display:grid; grid-template-columns:1fr 42px; gap:7px 12px; padding:9px 0; text-align:left; width:100%; }
-        .row:hover, .row:focus-visible { opacity:.82; outline:none; } .labels { display:flex; justify-content:space-between; gap:8px; font-size:14px; }
-        .name { font-weight:600; } .amount { color:var(--secondary-text-color); font-variant-numeric:tabular-nums; white-space:nowrap; }
-        .track { background:color-mix(in srgb, var(--primary-color) 12%, transparent); border-radius:999px; display:block; grid-column:1; height:14px; overflow:hidden; }
-        .fill { border-radius:999px; display:block; height:100%; transition:width .3s ease; }
-        .percent { align-self:end; color:var(--secondary-text-color); font-size:13px; font-weight:600; grid-column:2; grid-row:1; text-align:right; }
-        .sheet { align-items:end; background:rgba(0,0,0,.35); display:flex; inset:0; justify-content:center; padding:16px; position:fixed; z-index:9999; }
-        .sheet[hidden] { display:none; } .panel { background:var(--card-background-color, #fff); border-radius:20px 20px 12px 12px; box-shadow:0 -8px 32px rgba(0,0,0,.25); color:var(--primary-text-color); max-width:410px; padding:20px; width:100%; }
-        .panel-head { align-items:center; display:flex; justify-content:space-between; } .panel h3 { font-size:20px; margin:0; } .close { background:transparent; border:0; color:var(--secondary-text-color); font-size:30px; line-height:1; min-height:44px; min-width:44px; }
-        .panel-note { color:var(--secondary-text-color); font-size:14px; margin:4px 0 14px; } .display { background:var(--secondary-background-color, #f1f5f9); border-radius:12px; font-size:32px; font-variant-numeric:tabular-nums; font-weight:600; margin-bottom:14px; overflow:hidden; padding:13px 16px; text-align:right; }
-        .keypad { display:grid; gap:9px; grid-template-columns:repeat(3, 1fr); } .key { background:var(--secondary-background-color, #f1f5f9); border:0; border-radius:12px; color:var(--primary-text-color); font-size:24px; font-weight:600; min-height:58px; } .key:active { transform:scale(.97); }
-        .key.action { color:var(--primary-color); } .key.apply { background:var(--primary-color); color:var(--text-primary-color, #fff); }
-        @media (max-width: 450px) { .labels { align-items:flex-start; flex-direction:column; gap:2px; } }
-      </style>
-      <h2>${this._config.title || "Monthly Budget"}</h2>
-      <div class="month">${this._config.subtitle || new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date())}</div>${rows}
-      <div class="sheet" hidden><div class="panel" role="dialog" aria-modal="true" aria-label="Manual budget adjustment">
-        <div class="panel-head"><h3 class="panel-title"></h3><button class="close" aria-label="Close">×</button></div>
-        <div class="panel-note">Choose + or −, enter an amount, then apply it.</div><div class="display">+$0</div>
-        <div class="keypad"><button class="key action" data-key="sign">±</button><button class="key action" data-key="clear">Clear</button><button class="key action" data-key="back">⌫</button>
-          <button class="key" data-key="1">1</button><button class="key" data-key="2">2</button><button class="key" data-key="3">3</button>
-          <button class="key" data-key="4">4</button><button class="key" data-key="5">5</button><button class="key" data-key="6">6</button>
-          <button class="key" data-key="7">7</button><button class="key" data-key="8">8</button><button class="key" data-key="9">9</button>
-          <button class="key" data-key=".">.</button><button class="key" data-key="0">0</button><button class="key apply" data-key="apply">Apply</button>
-        </div></div></div>
-    </ha-card>`;
-
-    this._active = null;
-    this.querySelectorAll(".row").forEach((button) => button.addEventListener("click", () => this._openKeypad(Number(button.dataset.row))));
-    this.querySelector(".close").addEventListener("click", () => this._closeKeypad());
-    this.querySelector(".sheet").addEventListener("click", (event) => { if (event.target === event.currentTarget) this._closeKeypad(); });
-    this.querySelectorAll(".key").forEach((button) => button.addEventListener("click", () => this._key(button.dataset.key)));
+  _openKeypad(index){const data=this._categoryData(this._config.entities[index]);if(!data.ready)return;this._active={...data,value:'',sign:1,step:'amount',description:'',target:null,id:crypto.randomUUID(),month:this._month()};const dialog=document.createElement('dialog');dialog.setAttribute('aria-label','Manual budget entry');this.shadowRoot.append(dialog);dialog.addEventListener('cancel',e=>{e.preventDefault();this._closeKeypad();});this._sheet();dialog.showModal();}
+  _closeKeypad(){if(this._active?.saving)return;this._active=null;this.shadowRoot.querySelector('dialog')?.remove();this._render();}
+  _sheet(){
+    const a=this._active,dialog=this.shadowRoot.querySelector('dialog');if(!a||!dialog)return;
+    const title=a.step==='amount'?a.name:a.step==='from'?'From':'For',note=a.step==='amount'?'Choose + or −, enter an amount, then apply.':a.step==='from'?'Choose the category whose spending Blessing Others will cover.':'Enter a brief description';let body='';
+    if(a.step==='amount')body=`<div class="display">${a.sign<0?'−':'+'}${this._money(Number(a.value||0))}</div><div class="keypad">${['sign','clear','back','1','2','3','4','5','6','7','8','9','00','0','apply'].map(k=>`<button class="key ${k==='apply'?'primary':''}" data-key="${k}">${({sign:'±',clear:'Clear',back:'⌫',apply:'Apply'})[k]||k}</button>`).join('')}</div>`;
+    if(a.step==='from')body=this._config.entities.map(e=>this._categoryData(e)).filter(d=>d.category!=='Blessing Others').map(d=>`<button class="choice ${a.target===d.category?'selected':''}" data-target="${this._escape(d.category)}" ${d.ready?'':'disabled'}>${this._escape(d.name)}</button>`).join('')+`<div class="summary">Blessing Others ${this._money(a.amount)}${a.target?` → ${this._escape(a.target)} +${this._money(-a.amount)}`:''}</div><div class="actions"><button class="secondary" data-back>Back</button><button class="primary" data-next ${a.target?'':'disabled'}>Apply</button></div>`;
+    if(a.step==='description')body=`<div class="summary">${this._escape(a.name)} ${a.amount>0?'+':''}${this._money(a.amount)}${a.target?` → ${this._escape(a.target)} +${this._money(-a.amount)}`:''}</div><input aria-label="Description" maxlength="160" placeholder="What was this for?" value="${this._escape(a.description)}" ${a.payload?'readonly':''}><div class="keyboard">${['1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM'].map(row=>`<div class="keyboard-line">${[...row].map(k=>`<button class="letter" data-letter="${k}">${k}</button>`).join('')}</div>`).join('')}<div class="keyboard-line"><button class="letter" data-letter="shift">Aa</button><button class="letter wide" data-letter="space">Space</button><button class="letter" data-letter=".">.</button><button class="letter" data-letter="'">'</button><button class="letter" data-letter="back">⌫</button></div></div><div class="actions"><button class="secondary" data-back ${a.payload?'disabled':''}>Back</button><button class="primary" data-save>${a.saving?'Saving…':a.payload?'Retry save':'Apply'}</button></div>`;
+    dialog.innerHTML=`<div class="entry-layout"><section><div class="panel-head"><h3>${this._escape(title)}</h3><button class="close" aria-label="Close">×</button></div><p class="note">${note}</p>${body}<div class="error" role="alert">${this._escape(a.error||'')}</div></section><aside><h4>Entry history</h4><p class="note">${this._escape(a.name)} · latest entries</p><div class="history-list"></div></aside></div>`;
+    dialog.querySelector('.close').onclick=()=>this._closeKeypad();dialog.querySelectorAll('[data-key]').forEach(b=>b.onclick=()=>this._key(b.dataset.key));dialog.querySelectorAll('[data-target]').forEach(b=>b.onclick=()=>{a.target=b.dataset.target;this._sheet();});
+    const next=dialog.querySelector('[data-next]');if(next)next.onclick=()=>{a.step='description';this._sheet();};const back=dialog.querySelector('[data-back]');if(back)back.onclick=()=>{a.step=a.step==='description'&&a.target?'from':'amount';a.error='';this._sheet();};const input=dialog.querySelector('input');if(input)input.oninput=()=>{a.description=input.value;};
+    dialog.querySelectorAll('[data-letter]').forEach(b=>b.onclick=()=>{if(a.saving||a.payload)return;const k=b.dataset.letter;if(k==='shift'){a.upper=!a.upper;return;}a.description=k==='back'?a.description.slice(0,-1):(a.description+(k==='space'?' ':a.upper?k:k.toLowerCase())).slice(0,160);input.value=a.description;});const save=dialog.querySelector('[data-save]');if(save)save.onclick=()=>this._save();if(a.saving)dialog.querySelectorAll('button,input').forEach(e=>e.disabled=true);this._history();
   }
-
-  _openKeypad(index) {
-    const data = this._categoryData(this._config.entities[index]);
-    if (!data.adjustmentEntity) return;
-    this._active = { ...data, value: "", sign: 1 };
-    this.querySelector(".panel-title").textContent = data.name;
-    this.querySelector(".sheet").hidden = false;
-    this._updateDisplay();
-  }
-
-  _closeKeypad() { this._active = null; const sheet = this.querySelector(".sheet"); if (sheet) sheet.hidden = true; }
-  _updateDisplay() { const raw = this._active?.value || "0"; this.querySelector(".display").textContent = `${this._active.sign < 0 ? "−" : "+"}$${raw}`; }
-  _key(key) {
-    if (!this._active) return;
-    if (key === "sign") this._active.sign *= -1;
-    else if (key === "clear") this._active.value = "";
-    else if (key === "back") this._active.value = this._active.value.slice(0, -1);
-    else if (key === "apply") {
-      const amount = Number(this._active.value || 0) * this._active.sign;
-      if (Number.isFinite(amount) && amount !== 0) this._hass.callService("input_number", "set_value", { entity_id: this._active.adjustmentEntity, value: Number((this._active.helperAdjustment + amount).toFixed(2)) });
-      this._closeKeypad(); return;
-    } else if (key === "." ? !this._active.value.includes(".") : this._active.value.length < 8) this._active.value += key;
-    this._updateDisplay();
-  }
+  _history(){const list=this.shadowRoot.querySelector('.history-list');if(!list||!this._active)return;const category=this._active.category,entries=(this._ledger()?.entries||[]).filter(e=>e.effects?.[category]!==undefined);list.innerHTML=entries.length?entries.map(e=>`<div class="history-item"><div class="history-top"><span>${e.effects[category]>0?'+':''}${this._money(e.effects[category])}</span><span>${e.target?'Transfer':'Entry'}</span></div><div class="history-description">${this._escape(e.description)}</div>${e.target?`<div class="history-target">Blessing Others → ${this._escape(e.target)}</div>`:''}<div class="history-date">${this._escape(new Date(e.created_at).toLocaleString())}</div></div>`).join(''):'<p class="note">No recorded entries yet. History starts with this update.</p>';}
+  _key(key){const a=this._active;if(!a||a.saving)return;if(key==='sign')a.sign*=-1;else if(key==='clear')a.value='';else if(key==='back')a.value=a.value.slice(0,-1);else if(key==='apply'){const n=Number(a.value)*a.sign;if(!Number.isSafeInteger(n)||n===0||Math.abs(n)>1000000){a.error='Enter a whole-dollar amount from $1 to $1,000,000.';}else{a.amount=n;a.error='';a.step=a.category==='Blessing Others'&&n<0?'from':'description';if(a.step==='description')a.target=null;}}else if(/^\d{1,2}$/.test(key)&&a.value.length<7)a.value=(a.value+key).replace(/^0+(?=\d)/,'');this._sheet();}
+  async _save(){const a=this._active;if(!a||a.saving)return;if(!a.description.trim()){a.error='Enter a brief description before saving.';this._sheet();return;}if(a.month!==this._month()){a.error='The month changed. Close this entry and reopen it for the new month.';this._sheet();return;}a.payload||={request_id:a.id,category:a.category,amount:a.amount,description:a.description.trim(),...(a.target?{target:a.target}:{})};a.saving=true;a.error='';this._sheet();try{await this._hass.callService('home_finance','add_entry',a.payload);a.saving=false;this._closeKeypad();}catch(e){a.saving=false;a.error=`Could not confirm the save. Retry safely with the same entry. ${e.message||e}`;this._sheet();}}
 }
-customElements.define("home-finance-budget-card", HomeFinanceBudgetCard);
-window.customCards = window.customCards || [];
-window.customCards.push({ type: "home-finance-budget-card", name: "Home Finance Budget Card", description: "Touch-friendly monthly category budget bars." });
+customElements.define('home-finance-budget-card',HomeFinanceBudgetCard);
+window.customCards=window.customCards||[];window.customCards.push({type:'home-finance-budget-card',name:'Home Finance Budget Card',description:'Manual budget entries, reimbursements, and shared history.'});
