@@ -53,7 +53,7 @@ class FamilyCalendarCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (this._config && !this._events.length && !this._loading) this._fetchEvents();
+    if (this._config && !this._lastFetch && !this._loading) this._fetchEvents();
   }
 
   get hass() { return this._hass; }
@@ -65,11 +65,13 @@ class FamilyCalendarCard extends HTMLElement {
   getCardSize() { return 6; }
 
   connectedCallback() {
+    if (!this._refreshTimer) this._refreshTimer = window.setInterval(() => this._fetchEvents(), 5 * 60 * 1000);
     if (this._config) this._render();
   }
 
   disconnectedCallback() {
     if (this._refreshTimer) window.clearInterval(this._refreshTimer);
+    this._refreshTimer = null;
   }
 
   _dateKey(date) {
@@ -130,7 +132,8 @@ class FamilyCalendarCard extends HTMLElement {
   }
 
   async _fetchEvents() {
-    if (!this._hass || !this._config || this._loading) return;
+    if (!this._hass || !this._config) return;
+    if (this._loading) { this._fetchAgain = true; return; }
     const request = ++this._request;
     this._loading = true;
     this._error = "";
@@ -173,6 +176,7 @@ class FamilyCalendarCard extends HTMLElement {
       if (request === this._request) {
         this._loading = false;
         this._render();
+        if (this._fetchAgain) { this._fetchAgain = false; this._fetchEvents(); }
       }
     }
   }
@@ -202,6 +206,113 @@ class FamilyCalendarCard extends HTMLElement {
     let hash = 0;
     for (const char of entity) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
     return palette[Math.abs(hash) % palette.length];
+  }
+
+  _renderWeek(root, range) {
+    root.querySelector('.weekdays').remove();
+    const grid = root.querySelector('.grid');
+    grid.className = 'schedule'; grid.replaceChildren();
+    const style = document.createElement('style');
+    style.textContent = `
+      .schedule { margin:0 10px 12px; overflow:auto; max-height:76vh; min-height:420px; border:1px solid var(--divider-color); border-radius:10px; }
+      .schedule-head,.schedule-all,.schedule-body { display:grid; grid-template-columns:58px repeat(7,minmax(100px,1fr)); min-width:758px; }
+      .schedule-head { position:sticky; top:0; z-index:3; background:var(--card-background-color,#fff); }
+      .schedule-head>div { text-align:center; padding:12px 4px; border-bottom:1px solid var(--divider-color); font-size:13px; }
+      .schedule-head .current { color:var(--primary-color); font-weight:750; }
+      .schedule-all { position:sticky; top:42px; z-index:3; background:var(--card-background-color,#fff); }
+      .schedule-all>div { padding:5px; border-bottom:1px solid var(--divider-color); border-right:1px solid var(--divider-color); font-size:11px; }
+      .schedule-body { height:1536px; } .hour-labels,.time-day { position:relative; }
+      .hour-labels span { position:absolute; right:8px; font-size:11px; color:var(--secondary-text-color); }
+      .time-day { border-left:1px solid var(--divider-color); background:repeating-linear-gradient(to bottom,transparent 0,transparent 31px,color-mix(in srgb,var(--divider-color) 50%,transparent) 31px,color-mix(in srgb,var(--divider-color) 50%,transparent) 32px,transparent 32px,transparent 63px,var(--divider-color) 63px,var(--divider-color) 64px); }
+      .time-event { position:absolute; box-sizing:border-box; padding:4px 6px; border-radius:6px; border-left:3px solid currentColor; overflow:hidden; text-align:left; font-size:12px; line-height:1.2; min-width:0; }
+      .time-event strong,.time-event small { display:block; } .time-event small { margin-top:3px; font-size:10px; }
+      .all-event { height:auto; width:100%; text-align:left; padding:5px; margin:2px 0; font-size:11px; }
+      .now-line { position:absolute; left:0; right:0; border-top:2px solid #ec5265; pointer-events:none; z-index:2; }
+    `;
+    root.append(style);
+    const days = Array.from({length:7},(_,i) => { const d=new Date(range.start); d.setDate(d.getDate()+i); return d; });
+    const head=document.createElement('div'); head.className='schedule-head'; head.append(document.createElement('div'));
+    const all=document.createElement('div'); all.className='schedule-all'; const caption=document.createElement('div'); caption.textContent='All day'; all.append(caption);
+    const body=document.createElement('div'); body.className='schedule-body';
+    const labels=document.createElement('div'); labels.className='hour-labels';
+    for(let h=0;h<24;h++){const l=document.createElement('span'); l.style.top=`${h*64+2}px`;l.textContent=new Intl.DateTimeFormat(undefined,{hour:'numeric'}).format(new Date(2026,0,1,h));labels.append(l);}body.append(labels);
+    for(const day of days){
+      const next=new Date(day);next.setDate(next.getDate()+1);
+      const h=document.createElement('div');h.textContent=new Intl.DateTimeFormat(undefined,{weekday:'short',day:'numeric'}).format(day);
+      if(this._dateKey(day)===this._dateKey(new Date()))h.className='current'; head.append(h);
+      const ac=document.createElement('div');
+      for(const event of this._eventsForDay(day).filter(e=>e.allDay)){const b=document.createElement('button');b.className=`all-event ${this._colorFor(event.calendar)}`;b.textContent=event.summary||'Untitled event';b.onclick=()=>this._showEvent(event);ac.append(b);}all.append(ac);
+      const col=document.createElement('div');col.className='time-day';
+      col.addEventListener('click',e=>{if(e.target!==col)return;const minutes=Math.min(1410,Math.floor((e.clientY-col.getBoundingClientRect().top)/64*60/30)*30);const date=new Date(day);date.setMinutes(minutes);this._newEvent(date);});
+      const timed=this._events.filter(e=>!e.allDay&&this._enabledEntities.has(e.calendar)&&e.startDate<next&&(e.endDate||new Date(+e.startDate+1800000))>day).map(event=>{
+        const start=event.startDate<day?0:event.startDate.getHours()*60+event.startDate.getMinutes();
+        const endDate=event.endDate||new Date(+event.startDate+1800000);
+        const end=endDate>=next?1440:endDate.getHours()*60+endDate.getMinutes();
+        return {event,start,end:Math.max(start+1,end)};
+      }).sort((a,b)=>a.start-b.start||b.end-a.end);
+      // Assign simultaneous events separate lanes within each overlap group.
+      const groups=[];let group=[],edge=-1;
+      for(const t of timed){if(t.start>=edge&&group.length){groups.push(group);group=[];edge=-1;}group.push(t);edge=Math.max(edge,t.end);}if(group.length)groups.push(group);
+      for(const g of groups){const lanes=[];for(const t of g){let lane=lanes.findIndex(end=>end<=t.start);if(lane<0)lane=lanes.length;lanes[lane]=t.end;t.lane=lane;}
+        for(const t of g){const b=document.createElement('button');b.className=`time-event ${this._colorFor(t.event.calendar)}`;
+          b.style.cssText=`top:${t.start/60*64}px;height:${Math.max(20,(t.end-t.start)/60*64)}px;left:calc(${t.lane/lanes.length*100}% + 2px);width:calc(${100/lanes.length}% - 4px)`;
+          const title=document.createElement('strong');title.textContent=t.event.summary||'Untitled event';const time=document.createElement('small');time.textContent=this._timeLabel(t.event);b.append(title,time);b.title=`${title.textContent} · ${time.textContent}`;b.onclick=()=>this._showEvent(t.event);col.append(b);
+        }
+      }
+      if(this._dateKey(day)===this._dateKey(new Date())){const now=new Date();const line=document.createElement('div');line.className='now-line';line.style.top=`${(now.getHours()+now.getMinutes()/60)*64}px`;col.append(line);}body.append(col);
+    }
+    grid.append(head,all,body);
+    requestAnimationFrame(()=>{grid.scrollTop=64*7;});
+  }
+
+  _dialog(title) {
+    this.shadowRoot.querySelector('dialog')?.remove();
+    const dialog=document.createElement('dialog');
+    dialog.innerHTML=`<style>
+      dialog { box-sizing:border-box; width:min(520px,94vw); max-height:90vh; border:1px solid var(--divider-color); border-radius:20px; padding:24px; background:var(--card-background-color,#fff); color:var(--primary-text-color,#172334); box-shadow:0 20px 80px #0004; font:16px system-ui; }
+      dialog::backdrop { background:#15223766; } .dialog-head { display:flex; align-items:center; justify-content:space-between; gap:12px; } .dialog-head h2 { font-size:23px;margin:0; } dialog button,dialog .google-link { min-height:44px; padding:10px 16px; border:0; border-radius:10px; cursor:pointer; font:inherit; } dialog button { background:var(--secondary-background-color,#eef2f7);color:inherit; } .dialog-content { margin-top:16px; } dialog label {display:block;margin:12px 0;font-size:14px;} dialog input:not([type=checkbox]),dialog select,dialog textarea {box-sizing:border-box;width:100%;padding:12px;margin-top:5px;border:1px solid var(--divider-color,#ccd4de);border-radius:9px;font:inherit;background:var(--card-background-color,#fff);color:inherit;} dialog textarea {min-height:80px;} .form-pair {display:grid;grid-template-columns:1fr 1fr;gap:12px;} .primary {background:var(--primary-color,#287df0)!important;color:white!important;} .form-error {color:#c42d3c;white-space:pre-wrap;} .detail {white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;} .google-link {display:inline-block;background:#edf3ff;color:#2462bf;text-decoration:none;margin-top:12px;} .hint {font-size:12px;color:var(--secondary-text-color,#576778);}
+    </style><div class="dialog-head"><h2></h2><button type="button" aria-label="Close">×</button></div><div class="dialog-content"></div>`;
+    dialog.querySelector('h2').textContent=title;
+    dialog.querySelector('button').onclick=()=>dialog.close();
+    dialog.addEventListener('close',()=>dialog.remove());
+    this.shadowRoot.append(dialog);dialog.showModal();return dialog;
+  }
+
+  _showEvent(event) {
+    const dialog=this._dialog(event.summary||'Untitled event');const content=dialog.querySelector('.dialog-content');
+    const date=new Intl.DateTimeFormat(undefined,{dateStyle:'full',...(event.allDay?{}:{timeStyle:'short'})});
+    for(const text of [this._calendarName(event.calendar),event.allDay?'All day':null,date.format(event.startDate),!event.allDay&&event.endDate?`Ends ${date.format(event.endDate)}`:null,event.location,event.description]){if(!text)continue;const p=document.createElement('p');p.className='detail';p.textContent=text;content.append(p);}
+    const link=document.createElement('a');link.className='google-link';link.textContent='Edit or delete in Google Calendar';link.target='_blank';link.rel='noopener noreferrer';
+    const supplied=event.htmlLink||event.url;
+    link.href=supplied&&/^https:\/\/calendar\.google\.com\//.test(supplied)?supplied:`https://calendar.google.com/calendar/u/0/r/day/${event.startDate.getFullYear()}/${event.startDate.getMonth()+1}/${event.startDate.getDate()}`;
+    content.append(link);const note=document.createElement('p');note.className='hint';note.textContent='Opens Google Calendar on this event’s day when a direct event link is unavailable.';content.append(note);
+  }
+
+  _newEvent(start = new Date()) {
+    const dialog=this._dialog('New event');const content=dialog.querySelector('.dialog-content');
+    const form=document.createElement('form');
+    form.innerHTML=`<label>Calendar<select name="calendar" required></select></label><label>Title<input name="summary" required maxlength="250" autocomplete="off"></label><label><input type="checkbox" name="allDay"> All day</label><div class="form-pair"><label>Starts<input name="start" type="datetime-local" required></label><label>Ends<input name="end" type="datetime-local" required></label></div><label>Location<input name="location"></label><label>Notes<textarea name="description"></textarea></label><p class="hint zone"></p><p class="form-error" role="alert"></p><button class="primary" type="submit">Create event</button>`;
+    const el=n=>form.elements.namedItem(n);
+    const writable=this._config.entities.filter(id=>Number(this._hass?.states?.[id]?.attributes?.supported_features)&1);
+    for(const id of writable){const option=document.createElement('option');option.value=id;option.textContent=this._calendarName(id);el('calendar').append(option);}
+    const preferred=writable.find(id=>this._enabledEntities.has(id));if(preferred)el('calendar').value=preferred;
+    const local=d=>`${this._dateKey(d)}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    const end=new Date(+start+3600000);el('start').value=local(start);el('end').value=local(end);
+    form.querySelector('.zone').textContent=`Times use this screen’s time zone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}.`;
+    el('allDay').onchange=()=>{for(const name of ['start','end']){const field=el(name),old=field.value;field.type=el('allDay').checked?'date':'datetime-local';field.value=el('allDay').checked?old.slice(0,10):`${old.slice(0,10)}T09:00`;}};
+    if(!writable.length){form.querySelector('.form-error').textContent='No writable calendars are available. Enable read-write access for this calendar in Home Assistant.';form.querySelector('[type=submit]').disabled=true;}
+    form.onsubmit=async e=>{
+      e.preventDefault();const error=form.querySelector('.form-error');error.textContent='';const submit=form.querySelector('[type=submit]');
+      if(submit.disabled)return;
+      const data={summary:el('summary').value.trim(),location:el('location').value,description:el('description').value};
+      if(!data.summary){error.textContent='Enter an event title.';return;}
+      if(el('allDay').checked){if(el('end').value<el('start').value){error.textContent='The end date must not be before the start date.';return;}const exclusive=this._parseDate(el('end').value);exclusive.setDate(exclusive.getDate()+1);data.start_date=el('start').value;data.end_date=this._dateKey(exclusive);}
+      else{const begin=new Date(el('start').value),finish=new Date(el('end').value);if(!(finish>begin)){error.textContent='The end time must be after the start time.';return;}data.start_date_time=begin.toISOString();data.end_date_time=finish.toISOString();}
+      submit.disabled=true;submit.textContent='Saving…';
+      try{await this._hass.callService('calendar','create_event',data,{entity_id:el('calendar').value});dialog.close();await this._fetchEvents();}
+      catch(err){error.textContent=err?.message||'Could not save the event. Check calendar write access and try again.';submit.disabled=false;submit.textContent='Create event';}
+    };
+    content.append(form);
   }
 
   _render() {
@@ -244,6 +355,7 @@ class FamilyCalendarCard extends HTMLElement {
         .status { padding:0 16px 7px; color:var(--secondary-text-color); font-size:12px; min-height:12px; }
         .weekdays { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); border-top:1px solid var(--divider-color); border-left:1px solid var(--divider-color); margin:0 10px; }
         .weekday { text-align:center; padding:7px 2px; font-size:12px; font-weight:600; color:var(--secondary-text-color); border-right:1px solid var(--divider-color); }
+        .week-grid { grid-template-rows:minmax(720px,1fr) !important; } .week-grid .day { background:repeating-linear-gradient(to bottom, transparent 0, transparent calc(6.25% - 1px), var(--divider-color) calc(6.25% - 1px), var(--divider-color) 6.25%); }
         .grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); grid-template-rows:repeat(var(--fc-rows),minmax(0,1fr)); flex:1 1 auto; min-height:0; margin:0 10px 10px; border-left:1px solid var(--divider-color); border-top:1px solid var(--divider-color); }
         .day { min-width:0; min-height:0; overflow:hidden; padding:5px 5px 4px; border-right:1px solid var(--divider-color); border-bottom:1px solid var(--divider-color); display:flex; flex-direction:column; gap:3px; }
         .day.outside { color:var(--secondary-text-color); background:color-mix(in srgb, var(--secondary-background-color) 52%, transparent); }
@@ -359,6 +471,9 @@ class FamilyCalendarCard extends HTMLElement {
         const time = document.createElement("span"); time.className = "event-time"; time.textContent = this._timeLabel(event);
         const title = document.createElement("span"); title.className = "event-title"; title.textContent = event.summary || "Untitled event";
         line.append(time, title); chip.append(line); eventsBox.append(chip);
+        chip.tabIndex = 0; chip.setAttribute("role", "button");
+        chip.addEventListener("click", () => this._showEvent(event));
+        chip.addEventListener("keydown", e => { if (e.key === "Enter") this._showEvent(event); });
       }
       if (events.length > max) {
         const more = document.createElement("div"); more.className = "event"; more.textContent = `+${events.length - max} more`; more.style.color = "var(--secondary-text-color)"; eventsBox.append(more);
@@ -386,7 +501,14 @@ class FamilyCalendarCard extends HTMLElement {
       this._render();
       this._fetchEvents();
     }));
-    this.shadowRoot.replaceChildren(root);
+    if (this._view === "week") this._renderWeek(root, range);
+    const add = document.createElement("button");
+    add.textContent = "+ Event"; add.setAttribute("aria-label", "Add event");
+    add.addEventListener("click", () => this._newEvent());
+    root.querySelector(".controls").prepend(add);
+    // Keep the form alive when a background refresh completes.
+    const oldRoot = this.shadowRoot.querySelector('div');
+    if (oldRoot) oldRoot.replaceWith(root); else this.shadowRoot.prepend(root);
   }
 }
 
