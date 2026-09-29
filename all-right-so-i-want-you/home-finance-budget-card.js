@@ -33,7 +33,8 @@ class HomeFinanceBudgetCard extends HTMLElement {
       const name = item.name || attributes.friendly_name || item.entity;
       const adjustmentEntity = item.adjustment_entity;
       const manualAdjustment = adjustmentEntity ? this._number(this._hass.states[adjustmentEntity]?.state) : 0;
-      const available = this._number(attributes.available) + manualAdjustment;
+      const savedAdjustment = this._number(attributes.adjustments);
+      const available = this._number(attributes.available) + manualAdjustment - savedAdjustment;
       const spent = this._number(attributes.spent);
       const percent = Math.max(0, Math.min(100, available ? ((available - spent) / available) * 100 : 0));
       const color = item.color || "var(--primary-color)";
