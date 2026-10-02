@@ -5,11 +5,12 @@ class HomePhotoDashboard extends HTMLElement {
   set hass(hass){const previous=this._hass;this._hass=hass;if(!this._config)return;if(this._budget)this._budget.hass=hass;this._header();this._updateMusic();if(!previous||previous.states[this._config.todo_entity]!==hass.states[this._config.todo_entity])this._loadTodo();if(!this._lastEvents)this._loadEvents();if(this._config.photo_album&&!this._lastPhotos)this._loadPhotos();}
   getCardSize(){return 14;}
   connectedCallback(){if(this._config&&!this._observers.length)this._build();if(!this._timer)this._timer=setInterval(()=>{this._header();if(this._hass&&Date.now()-(this._lastEvents||0)>300000)this._loadEvents();if(this._config?.photo_album&&this._hass&&Date.now()-(this._lastPhotos||0)>3600000)this._loadPhotos();},15000);}
-  disconnectedCallback(){document.removeEventListener('pointerdown',this._outsideMenu);clearTimeout(this._musicPendingTimer);this._closeSheet();clearInterval(this._timer);clearTimeout(this._noticeTimer);clearTimeout(this._photoTimer);this._photoGeneration=(this._photoGeneration||0)+1;this._timer=null;this._observers.forEach(o=>o.disconnect());this._observers=[];}
+  disconnectedCallback(){this._inlineResize?.disconnect();document.removeEventListener('pointerdown',this._inlineOutside);document.removeEventListener('keydown',this._inlineEscape);this._todoAnimation?.cancel();this._agendaAnimation?.cancel();document.removeEventListener('pointerdown',this._outsideMenu);clearTimeout(this._musicPendingTimer);this._closeSheet();clearInterval(this._timer);clearTimeout(this._noticeTimer);clearTimeout(this._photoTimer);this._photoGeneration=(this._photoGeneration||0)+1;this._timer=null;this._observers.forEach(o=>o.disconnect());this._observers=[];}
   _esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
   _zone(){return this._hass?.config?.time_zone||'America/Los_Angeles';}
   _dateKey(date){return new Intl.DateTimeFormat('en-CA',{timeZone:this._zone(),year:'numeric',month:'2-digit',day:'2-digit'}).format(date);}
   _build(){
+    this._inlineResize?.disconnect();document.removeEventListener('pointerdown',this._inlineOutside);document.removeEventListener('keydown',this._inlineEscape);this._todoAnimation?.cancel();this._agendaAnimation?.cancel();this._todoAnimation=null;this._agendaAnimation=null;
     this._observers.forEach(o=>o.disconnect());this._observers=[];
     this.shadowRoot.innerHTML=`<style>
       :host{display:block;color:#25332f;font:16px 'Segoe UI',Arial,sans-serif;--primary-text-color:#25332f;--secondary-text-color:#788078;--primary-color:#537c6b;--card-background-color:#fcfcf9;--ha-card-background:#fcfcf9;--secondary-background-color:#eaece6;--divider-color:#e0e3dc;--primary-font-family:'Segoe UI',Arial,sans-serif}
@@ -43,7 +44,7 @@ class HomePhotoDashboard extends HTMLElement {
     </style><main class="shell ${this._wall?'wall':''}"><header><details><summary><span class="home-icon">⌂</span>${this._esc(this._config.title)}<span class="chevron">▾</span></summary><nav class="menu"><button data-menu="wall">${this._wall?'Show Home Assistant':'Wall display mode'}</button><button data-menu="full">Enter fullscreen</button><button data-menu="calendar">Calendar Dashboard</button><button data-menu="refresh">Refresh data</button></nav></details><div class="status"><span class="header-date"></span><span class="clock"></span><span class="weather"><span class="weather-icon"></span><span class="temperature"></span></span><button class="full" aria-label="Toggle fullscreen" title="Toggle fullscreen">⛶</button></div></header><div class="layout"><section class="hero" aria-label="Family photo area">
     <svg class="landscape" viewBox="0 0 800 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#e9e5d6"/><stop offset=".6" stop-color="#d2d6c3"/><stop offset="1" stop-color="#b2c0a7"/></linearGradient><linearGradient id="hill" x2="1" y2="1"><stop stop-color="#aeb9a0"/><stop offset="1" stop-color="#768f79"/></linearGradient></defs><rect width="800" height="1000" fill="url(#sky)"/><circle cx="535" cy="270" r="94" fill="#f3ebd1" opacity=".9"/><path d="M0 530Q190 340 380 480T800 410V1000H0Z" fill="#bbc5ad"/><path d="M0 580Q180 650 370 510T800 530V1000H0Z" fill="url(#hill)"/><path d="M0 790Q250 450 500 640T800 680V1000H0Z" fill="#809b82"/><path d="M0 820Q220 640 440 810T800 740V1000H0Z" fill="#647f6d"/><path d="M410 1000Q290 840 450 710T500 525Q570 680 470 760T520 1000" fill="#c3c9b0" opacity=".55"/></svg><div class="photo-label">Your home, your moments</div><div class="photo-hint">Ready for a favorite family photo</div><article class="today"><h1>Today at Home</h1><div class="date"></div><div class="agenda"><div class="empty">Loading your day…</div></div></article></section><section class="right"><article class="tile todo"><div class="tile-head"><h2>Household To-Do</h2><div class="todo-controls"><span class="subtle task-count"></span><button class="add" aria-label="Add task">+</button></div></div><form class="add-form" hidden><input aria-label="New task" placeholder="Add a household task" maxlength="250" required><button type="submit">Add</button></form><div class="tasks"><div class="empty">Loading tasks…</div></div><div class="error" role="status"></div></article><article class="tile music"><div class="tile-head"><h2>Music at Home</h2><span class="subtle">Not connected yet</span></div><div class="music-grid">${['Morning','Dinner','Chill','Cleaning'].map(n=>`<button class="mood ${n.toLowerCase()}" data-mood="${n}" aria-label="${n} music — not connected"><span>${n}</span></button>`).join('')}</div></article><article class="tile budget"><div class="budget-slot"><div class="empty">Loading budget…</div></div></article></section></div><div class="notice" role="status" hidden></div></main>`;
     this.shadowRoot.querySelector('.full').onclick=()=>this._fullscreen();this.shadowRoot.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>this._menu(b.dataset.menu));this.shadowRoot.querySelectorAll('[data-mood]').forEach(b=>b.onclick=()=>this._notice(`${b.dataset.mood} is ready to connect once we choose your speakers and playlist.`));this.shadowRoot.querySelector('.add').onclick=()=>{const form=this.shadowRoot.querySelector('.add-form');form.hidden=!form.hidden;if(!form.hidden)form.querySelector('input').focus();};this.shadowRoot.querySelector('form').onsubmit=e=>{e.preventDefault();this._addTask();};
-    this._minimal();this._mountBudget();this._header();this._setupPhotos();if(this._hass){this._loadTodo();this._loadEvents();if(this._config.photo_album)this._loadPhotos();}
+    this._minimal();this._setupInlinePanels();this._mountBudget();this._header();this._setupPhotos();if(this._hass){this._loadTodo();this._loadEvents();if(this._config.photo_album)this._loadPhotos();}
   }
   _setupPhotos(){
     clearTimeout(this._photoTimer);this._photoGeneration=(this._photoGeneration||0)+1;this._photoLoading=false;this._lastPhotos=0;this._currentPhoto=null;
@@ -111,7 +112,6 @@ class HomePhotoDashboard extends HTMLElement {
     this.shadowRoot.append(d);this._dialog=d;d.querySelector('.sheet-close').onclick=()=>this._closeSheet();this._dismissOnBackdrop(d,()=>this._closeSheet());d.showModal();return d;
   }
   _closeSheet(){if(this._sheetBusy)return;this._dialog?.remove();this._dialog=null;this._sheetKind=null;this._textModel=null;}
-  _openList(kind){const d=this._newSheet(kind,kind==='agenda'?'Today at Home':'Household To-Do');if(!d)return;if(kind==='agenda')this._renderAgenda();else this._renderTodo();}
   _openTaskInput(){
     const d=this._newSheet('text','Add a task');if(!d)return;
     this._textModel={value:'',upper:false};
@@ -132,21 +132,8 @@ class HomePhotoDashboard extends HTMLElement {
   }
   _taskMarkup(items){return items.length?items.map(i=>`<label class="task ${i.status==='completed'?'done':''}"><input type="checkbox" data-uid="${this._esc(i.uid)}" ${i.status==='completed'?'checked':''} aria-label="${this._esc(i.summary)}"><span>${this._esc(i.summary)}</span></label>`).join(''):'<div class="empty">All caught up. Enjoy your home.</div>';}
   _bindTasks(root){root.querySelectorAll('[data-uid]').forEach(input=>input.onchange=async()=>{input.disabled=true;try{await this._hass.callService('todo','update_item',{item:input.dataset.uid,status:input.checked?'completed':'needs_action'},{entity_id:this._config.todo_entity});await this._loadTodo();}catch{input.checked=!input.checked;this._notice('Could not update the task. Please try again.');}finally{input.disabled=false;}});}
-  _renderTodo(){
-    const list=this.shadowRoot.querySelector('.tasks');if(!list)return;const pending=this._items.filter(i=>i.status!=='completed');list.innerHTML=this._taskMarkup(pending.slice(0,3));this._bindTasks(list);
-    const more=this.shadowRoot.querySelector('.todo-more');if(more){more.hidden=pending.length<=3;more.textContent=`+${Math.max(0,pending.length-3)} more`;}
-    if(this._sheetKind==='todo'){const body=this._dialog.querySelector('.sheet-body');body.innerHTML=this._taskMarkup(pending);this._bindTasks(body);}
-  }
   _eventTime(e){if(/^\d{4}-\d{2}-\d{2}$/.test(e.start))return 'All day';const fmt=value=>{const date=new Date(value);return Number.isNaN(+date)?'':new Intl.DateTimeFormat('en-US',{timeZone:this._zone(),hour:'numeric',minute:'2-digit'}).format(date);};return [e.start,e.end].filter(Boolean).map(fmt).filter(Boolean).join(' – ');}
   _eventMarkup(events){return events.map(e=>`<div class="agenda-row"><span class="agenda-icon">${this._icon('calendar')}</span><div><div class="agenda-title">${this._esc(e.summary||'Untitled event')}</div><div class="agenda-time">${this._esc(this._eventTime(e))}</div></div></div>`).join('');}
-  _renderAgenda(){
-    const list=this.shadowRoot.querySelector('.agenda');if(!list)return;
-    const now=Date.now(),upcoming=this._events.filter(e=>/^\d{4}-\d{2}-\d{2}$/.test(e.start)||new Date(e.end||e.start).getTime()>now);
-    const compact=(upcoming.length?upcoming:this._events.slice(-2)).slice(0,2);
-    list.innerHTML=compact.length?this._eventMarkup(compact):`<div class="empty">${this._eventsUnavailable?'Calendar temporarily unavailable.':'A little room to enjoy the day.'}</div>`;
-    const more=this.shadowRoot.querySelector('.agenda-more');if(more){const count=this._events.length-compact.length;more.hidden=count<=0;more.textContent=`+${count} more`;}
-    if(this._sheetKind==='agenda')this._dialog.querySelector('.sheet-body').innerHTML=`<div class="agenda">${this._eventMarkup(this._events)||'<div class="empty">No events today.</div>'}</div>`;
-  }
   async _loadEvents(){
     if(!this._hass||this._eventsLoading)return;this._eventsLoading=true;
     try{
@@ -216,6 +203,57 @@ class HomePhotoDashboard extends HTMLElement {
   }
 
 
+
+  _setupInlinePanels(){
+    const style=document.createElement('style');style.textContent=`
+      .right{position:relative}.todo-anchor{position:relative;flex:none;width:100%;z-index:4}.todo-anchor>.todo{position:absolute;top:0;left:0;width:100%;min-height:0!important;flex:none!important;max-height:var(--todo-max,75dvh);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;background:#fafbf9;transition:box-shadow .24s ease}.todo-anchor>.todo.expanded{box-shadow:0 18px 36px #233e3326}.todo-anchor .tasks{flex:none;overflow:visible}.todo-anchor .tile-head{position:sticky;top:0;background:#fafbf9;z-index:1}.todo-anchor .more{flex:none}.todo.expanded .task span{white-space:normal}.today{max-height:calc(100% - 28px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}.today.expanded .agenda{row-gap:18px}.today.expanded .agenda-row{border-left:0;padding-left:0}.today.expanded .agenda-row:nth-child(even){border-left:1px solid #ffffff40;padding-left:15px}.today.expanded .agenda-title{-webkit-line-clamp:unset}.today .more,.todo .more{min-height:36px}.right>.music{flex:1;display:flex;flex-direction:column}.music-body{flex:1;display:flex;flex-direction:column}.music-grid{flex:1;grid-template-rows:1fr 1fr}.mood{height:auto;min-height:clamp(68px,10vh,96px)}.player{flex:1}
+      @media(min-width:851px) and (max-height:740px){.mood{min-height:61px}}
+      @media(max-width:850px){.right>.music{flex:none}.mood{min-height:76px}.today.expanded .agenda{grid-template-columns:1fr}.today.expanded .agenda-row:nth-child(even){border:0;padding-left:0}}
+      @media(prefers-reduced-motion:reduce){.todo-anchor>.todo{transition:none}}
+    `;this.shadowRoot.append(style);
+    const todo=this.shadowRoot.querySelector('.todo'),anchor=document.createElement('div');anchor.className='todo-anchor';todo.before(anchor);anchor.append(todo);
+    this._todoExpanded=false;this._agendaExpanded=false;
+    this._inlineResize=new ResizeObserver(()=>{this._measureTodo();});this._inlineResize.observe(this.shadowRoot.querySelector('.right'));
+    this._inlineOutside=e=>{const path=e.composedPath();if(path.some(n=>n?.tagName==='DIALOG'))return;if(this._todoExpanded&&!path.includes(todo))this._togglePanel('todo',false);const today=this.shadowRoot.querySelector('.today');if(this._agendaExpanded&&!path.includes(today))this._togglePanel('agenda',false);};
+    document.addEventListener('pointerdown',this._inlineOutside);
+    this._inlineEscape=e=>{if(e.key==='Escape'&&!this.shadowRoot.querySelector('dialog')){this._togglePanel('todo',false);this._togglePanel('agenda',false);}};document.addEventListener('keydown',this._inlineEscape);
+    this._measureTodo();
+  }
+  _measureTodo(){
+    const todo=this.shadowRoot.querySelector('.todo'),anchor=this.shadowRoot.querySelector('.todo-anchor');if(!todo||!anchor)return;
+    const right=this.shadowRoot.querySelector('.right');todo.style.setProperty('--todo-max',`${Math.max(220,Math.min(right.clientHeight,window.innerHeight-100))}px`);
+    if(!this._todoExpanded&&!this._todoAnimation)anchor.style.height=`${todo.getBoundingClientRect().height}px`;
+  }
+  _openList(kind){this._togglePanel(kind,kind==='todo'?!this._todoExpanded:!this._agendaExpanded);}
+  _togglePanel(kind,expanded){
+    const key=kind==='todo'?'_todoExpanded':'_agendaExpanded';if(this[key]===expanded)return;
+    const panel=this.shadowRoot.querySelector(kind==='todo'?'.todo':'.today');if(!panel)return;
+    const oldHeight=panel.getBoundingClientRect().height,animationKey=kind==='todo'?'_todoAnimation':'_agendaAnimation';
+    this[animationKey]?.cancel();this[animationKey]=null;this[key]=expanded;panel.classList.toggle('expanded',expanded);
+    if(kind==='todo')this._renderTodo();else this._renderAgenda();
+    const newHeight=panel.getBoundingClientRect().height;
+    if(kind==='todo'&&!expanded)this.shadowRoot.querySelector('.todo-anchor').style.height=`${newHeight}px`;
+    if(!matchMedia('(prefers-reduced-motion: reduce)').matches&&Math.abs(newHeight-oldHeight)>1){
+      const animation=panel.animate([{height:`${oldHeight}px`,overflow:'hidden'},{height:`${newHeight}px`,overflow:'hidden'}],{duration:240,easing:'cubic-bezier(.2,.75,.25,1)'});this[animationKey]=animation;
+      animation.finished.then(()=>{if(this[animationKey]===animation){this[animationKey]=null;if(kind==='todo')this._measureTodo();}}).catch(()=>{});
+    }
+  }
+  _renderTodo(){
+    const list=this.shadowRoot.querySelector('.tasks');if(!list)return;const pending=this._items.filter(i=>i.status!=='completed');
+    if(pending.length<=3){this._todoExpanded=false;this.shadowRoot.querySelector('.todo').classList.remove('expanded');}
+    list.innerHTML=this._taskMarkup(this._todoExpanded?pending:pending.slice(0,3));this._bindTasks(list);
+    const more=this.shadowRoot.querySelector('.todo-more');if(more){more.hidden=pending.length<=3;more.textContent=this._todoExpanded?'Show less':`+${Math.max(0,pending.length-3)} more`;more.setAttribute('aria-expanded',String(!!this._todoExpanded));}
+    this._measureTodo();
+  }
+  _renderAgenda(){
+    const list=this.shadowRoot.querySelector('.agenda');if(!list)return;
+    const now=Date.now(),upcoming=this._events.filter(e=>/^\d{4}-\d{2}-\d{2}$/.test(e.start)||new Date(e.end||e.start).getTime()>now);
+    const compact=(upcoming.length?upcoming:this._events.slice(-2)).slice(0,2),count=this._events.length-compact.length;
+    if(count<=0){this._agendaExpanded=false;this.shadowRoot.querySelector('.today').classList.remove('expanded');}
+    const shown=this._agendaExpanded?this._events:compact;
+    list.innerHTML=shown.length?this._eventMarkup(shown):`<div class="empty">${this._eventsUnavailable?'Calendar temporarily unavailable.':'A little room to enjoy the day.'}</div>`;
+    const more=this.shadowRoot.querySelector('.agenda-more');if(more){more.hidden=count<=0;more.textContent=this._agendaExpanded?'Show less':`+${count} more`;more.setAttribute('aria-expanded',String(!!this._agendaExpanded));}
+  }
 
 }
 customElements.define('home-photo-dashboard',HomePhotoDashboard);
